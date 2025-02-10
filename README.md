@@ -57,3 +57,67 @@
             }
         }
     }
+#### 输入条件筛选数据，导出时仍为全部数据  
+>查询和导出方法如下
+>
+    private LambdaQueryWrapper<SysLogLoginEntity> getWrapper(SysLogLoginQuery query, UserDetail userDetail) {
+
+        LambdaQueryWrapper<SysLogLoginEntity> wrapper = Wrappers.lambdaQuery();
+        wrapper.like(StrUtil.isNotBlank(query.getUsername()), SysLogLoginEntity::getUsername, query.getUsername());
+        wrapper.like(StrUtil.isNotBlank(query.getIp()), SysLogLoginEntity::getIp, query.getIp());
+        wrapper.eq(SysLogLoginEntity::getComId, userDetail.getComId());
+        RoleTypeEnum roleTypeEnum = RoleTypeEnum.getByCode(userDetail.getRoleType());
+        if (RoleTypeEnum.PROJECT_COMMUNITY.equals(roleTypeEnum)
+                || RoleTypeEnum.PROJECT_OFFICE.equals(roleTypeEnum)) {
+            wrapper.eq(SysLogLoginEntity::getUserId, userDetail.getId());
+        }
+        wrapper.orderByDesc(SysLogLoginEntity::getId);
+
+        return wrapper;
+    }
+    @Override
+    @SneakyThrows
+    public void export(SysLogLoginQuery query) {
+        UserDetail detail = SecurityUser.getUser();
+        if (Objects.isNull(detail)) {
+            return;
+        }
+
+        LambdaQueryWrapper<SysLogLoginEntity> wrapper = getWrapper(query, detail);
+        List<SysLogLoginEntity> list = list(wrapper);
+
+        SysTimezoneEntity zone = timezoneDao.selectById(detail.getTimezoneId());
+        String timeOffSet = Objects.isNull(zone) ? null : zone.getTimeOffset();
+        List<SysLogLoginVO> sysLogLoginVOS = CollectionUtil.newArrayList();
+        for (SysLogLoginEntity loginLog : list) {
+            SysLogLoginVO logLoginVO = SysLogLoginConvert.INSTANCE.convert(loginLog);
+            logLoginVO.setCreateTime(DateTimeUtil.translate(loginLog.getCreateTime(), timeOffSet));
+            sysLogLoginVOS.add(logLoginVO);
+        }
+        // 写到浏览器打开
+        ExcelUtils.excelExport(SysLogLoginVO.class, "system_login_log_excel" + DateUtils.format(new Date()), null, sysLogLoginVOS);
+
+    }
+>deubg发现，在查询时，query能正确获取到传入的数据，在export时，query为空，即数据传输有问题  
+>返回controller检查数据传输
+>
+    @GetMapping("export")
+    @Operation(summary = "导出excel")
+    @OperateLog(type = OperateTypeEnum.EXPORT)
+    @PreAuthorize("hasAuthority('sys:log:login')")
+    public void export(SysLogLoginQuery query) {
+        sysLogLoginService.export(query);
+    }
+>缺了@RequestBody注解
+>
+    @PostMapping("export")
+    @Operation(summary = "导出excel")
+    @OperateLog(type = OperateTypeEnum.EXPORT)
+    @PreAuthorize("hasAuthority('sys:log:login')")
+    public void export(@RequestBody  SysLogLoginQuery query) {
+        sysLogLoginService.export(query);
+    }
+>添加@RequestBody后成功根据筛选结果导出数据
+>>@RequestBody主要用来接收前端传递给后端的json字符串中的数据(请求体中的数据)
+
+>另外 请求体是 JSON 格式的对象，所以修改前后端请求为post（原本为get)
